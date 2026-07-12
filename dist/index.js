@@ -38,8 +38,12 @@ const limiter = (0, express_rate_limit_1.default)({
 app.use('/api/', limiter);
 // Middleware configuration
 app.use((0, cors_1.default)({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    origin: (origin, callback) => {
+        // Dynamically reflect request origin to allow multiple domains (local & production) and support credentials
+        callback(null, true);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express_1.default.json());
