@@ -89,6 +89,14 @@ app.get('/api/health', async (req, res) => {
         });
     }
 });
+app.get('/api', (req, res) => {
+    res.status(200).json({
+        status: 'healthy',
+        message: 'DaraTopup Backend API Server is running successfully!',
+        timestamp: new Date().toISOString(),
+        sandbox: process.env.SANDBOX_MODE === 'true',
+    });
+});
 // ─── API Routes ────────────────────────────────────────────────────────────────
 app.use('/api/auth', auth_1.default);
 app.use('/api/products', products_1.default);
