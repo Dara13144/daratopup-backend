@@ -179,26 +179,21 @@ async function seedDatabase() {
 }
 async function runDatabaseStartup() {
     console.log('[Startup] Initializing database...');
-    // Step 1: Run Prisma migrations to create tables
+    // Step 1: Sync Prisma schema to database directly (supports both SQLite and PostgreSQL without dialect migration crashes)
     try {
         const schemaPath = path_1.default.join(__dirname, '..', '..', 'prisma', 'schema.prisma');
-        console.log('[Startup] Running prisma migrate deploy...');
-        (0, child_process_1.execSync)(`npx prisma migrate deploy --schema="${schemaPath}"`, {
+        console.log('[Startup] Running prisma db push...');
+        (0, child_process_1.execSync)(`npx prisma db push --accept-data-loss --schema="${schemaPath}"`, {
             cwd: path_1.default.join(__dirname, '..', '..'),
             stdio: 'pipe',
             env: { ...process.env },
             timeout: 60_000, // 60s timeout
         });
-        console.log('[Startup] ✅ Migrations applied successfully.');
+        console.log('[Startup] ✅ Database schema synced successfully.');
     }
     catch (err) {
         const msg = (err.stderr?.toString() || err.stdout?.toString() || err.message || '').trim();
-        if (!msg.includes('No pending migrations') && !msg.includes('already applied')) {
-            console.warn('[Startup] Migration warning (non-fatal):', msg.substring(0, 300));
-        }
-        else {
-            console.log('[Startup] ✅ No pending migrations.');
-        }
+        console.warn('[Startup] Database sync warning (non-fatal):', msg.substring(0, 300));
     }
     // Step 2: Check if products exist — if not, seed
     try {
