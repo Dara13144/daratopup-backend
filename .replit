@@ -1,0 +1,10 @@
+run = "npm run dev"
+
+[entrypoint]
+entrypoint = "src/index.ts"
+
+[packager]
+language = "typescript"
+
+[deployment]
+run = ["npm", "run", "dev"]
