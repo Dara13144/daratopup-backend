@@ -19,11 +19,21 @@ router.get('/', async (req: Request, res: Response) => {
       orderBy: { name: 'asc' },
     });
     return res.status(200).json(products);
-  } catch (error) {
-    console.error('Error fetching products:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+  } catch (error: any) {
+    // Log the full error details for diagnosis
+    console.error('[GET /api/products] ERROR:', {
+      name: error?.constructor?.name,
+      message: error?.message,
+      code: error?.code,
+      meta: error?.meta,
+    });
+    return res.status(500).json({
+      error: 'Internal server error',
+      details: process.env.NODE_ENV !== 'production' ? error?.message : 'Check server logs',
+    });
   }
 });
+
 
 // 2. Lookup Player Nickname by Game and Player ID (Public)
 // IMPORTANT: This route MUST be before /:slug to avoid Express matching 'lookup' as a slug.

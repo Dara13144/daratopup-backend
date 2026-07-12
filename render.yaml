@@ -5,8 +5,8 @@ services:
     region: singapore
     plan: free
     rootDir: backend
-    buildCommand: npm install && npm run build && npx prisma generate && npx prisma migrate deploy
-    startCommand: npm start
+    buildCommand: npm install && npm run build && npx prisma generate
+    startCommand: node dist/index.js
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
@@ -17,5 +17,6 @@ services:
         value: "true"
       - key: BACKEND_URL
         value: https://daratopup-backend-1.onrender.com
-      # Set DATABASE_URL in Render dashboard to PostgreSQL connection string
-      # DATABASE_URL should be your Supabase PostgreSQL URL
+      # IMPORTANT: Set DATABASE_URL in Render dashboard!
+      # For SQLite (simple/free): DATABASE_URL=file:./dev.db
+      # For PostgreSQL (persistent): DATABASE_URL=postgresql://...

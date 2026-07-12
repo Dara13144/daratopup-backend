@@ -7,7 +7,7 @@ import path from 'path';
 import multer from 'multer';
 import prisma from './prisma';
 
-// Load environmental variables FIRST before anything else
+// Load environmental variables FIRST — before any other imports
 dotenv.config();
 
 // Route Imports
@@ -18,31 +18,30 @@ import adminRouter from './routes/admin';
 import paymentsRouter from './routes/payments';
 import webhookRouter from './routes/webhook';
 import { verifyAbaKhqrPayment, processVerifiedPayment, expireOldOrders } from './utils/paymentVerification';
+import { runDatabaseStartup } from './utils/startup';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // ─── Security Middleware ───────────────────────────────────────────────────────
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" },
-  contentSecurityPolicy: false, // Disable CSP to avoid blocking API responses
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: false,
 }));
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
-// Allow all origins (works for both local dev and production on Render/Vercel)
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, curl, Postman) and all browser origins
-    callback(null, true);
+    callback(null, true); // Allow all origins — works for Vercel, Render, and local dev
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   exposedHeaders: ['Content-Length', 'X-Request-Id'],
-  optionsSuccessStatus: 200, // Some legacy browsers choke on 204
+  optionsSuccessStatus: 200,
 }));
 
-// Handle OPTIONS preflight requests explicitly for all routes
+// Handle all OPTIONS preflight requests
 app.options('*', cors());
 
 // ─── Body Parsing ─────────────────────────────────────────────────────────────
@@ -51,16 +50,16 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ─── Rate Limiting ────────────────────────────────────────────────────────────
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Too many requests from this IP, please try again after 15 minutes' },
-  skip: (req) => req.path === '/api/health' || req.path === '/', // Skip health checks
+  message: { error: 'Too many requests, please try again later.' },
+  skip: (req) => req.path === '/api/health' || req.path === '/',
 });
 app.use('/api/', limiter);
 
-// ─── Static File Serving ───────────────────────────────────────────────────────
+// ─── Static Files ─────────────────────────────────────────────────────────────
 app.use('/uploads', express.static(path.join(__dirname, '..', 'public', 'uploads')));
 
 // ─── Health & Root Routes ─────────────────────────────────────────────────────
@@ -74,13 +73,26 @@ app.get('/', (req, res) => {
   });
 });
 
-app.get('/api/health', (req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    message: 'DaraTopup Backend API Server is running successfully!',
-    timestamp: new Date().toISOString(),
-    sandbox: process.env.SANDBOX_MODE === 'true',
-  });
+app.get('/api/health', async (req, res) => {
+  try {
+    // Quick DB ping to verify connectivity
+    await prisma.$queryRaw`SELECT 1`;
+    res.status(200).json({
+      status: 'healthy',
+      message: 'DaraTopup Backend API Server is running successfully!',
+      timestamp: new Date().toISOString(),
+      sandbox: process.env.SANDBOX_MODE === 'true',
+      db: 'connected',
+    });
+  } catch (err: any) {
+    res.status(200).json({
+      status: 'healthy',
+      message: 'DaraTopup Backend API Server is running successfully!',
+      timestamp: new Date().toISOString(),
+      sandbox: process.env.SANDBOX_MODE === 'true',
+      db: 'error: ' + err.message,
+    });
+  }
 });
 
 // ─── API Routes ────────────────────────────────────────────────────────────────
@@ -89,12 +101,12 @@ app.use('/api/products', productsRouter);
 app.use('/api/orders', ordersRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/payments', paymentsRouter);
-app.use('/api/payment', paymentsRouter);   // Alias for legacy compatibility
+app.use('/api/payment', paymentsRouter);
 app.use('/api/webhook', webhookRouter);
 app.use('/api/payments/webhook', webhookRouter);
 app.use('/api/payment/webhook', webhookRouter);
 
-// ─── Product Image Upload Endpoint ────────────────────────────────────────────
+// ─── Product Image Upload ─────────────────────────────────────────────────────
 import { authenticateJWT, requireAdmin } from './middleware/auth';
 
 const storage = multer.diskStorage({
@@ -105,7 +117,7 @@ const storage = multer.diskStorage({
     cb(null, `${base}-${Date.now()}${ext}`);
   },
 });
-const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB max
+const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } });
 
 app.post(
   '/api/admin/upload-image',
@@ -114,8 +126,7 @@ app.post(
   upload.single('image'),
   (req: any, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const imageUrl = `/uploads/products/${req.file.filename}`;
-    return res.status(200).json({ imageUrl });
+    return res.status(200).json({ imageUrl: `/uploads/products/${req.file.filename}` });
   }
 );
 
@@ -126,10 +137,10 @@ app.use((req, res) => {
     availableRoutes: [
       'GET /',
       'GET /api/health',
-      'POST /api/auth/login',
-      'POST /api/auth/register',
       'GET /api/products',
       'GET /api/products/:slug',
+      'POST /api/auth/login',
+      'POST /api/auth/register',
       'POST /api/orders',
       'GET /api/orders/status/:txnId',
     ],
@@ -138,12 +149,16 @@ app.use((req, res) => {
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Unhandled Server Error:', err);
-  res.status(500).json({ error: 'Internal Server Error', details: process.env.NODE_ENV === 'development' ? err.message : undefined });
+  console.error('[Error]', err.constructor?.name, '-', err.message);
+  if (err.stack) console.error(err.stack.split('\n').slice(0, 5).join('\n'));
+  res.status(500).json({
+    error: 'Internal Server Error',
+    ...(process.env.NODE_ENV !== 'production' && { details: err.message }),
+  });
 });
 
 // ─── BACKGROUND PAYMENT SWEEPER ───────────────────────────────────────────────
-const SWEEP_INTERVAL_MS = 15_000; // 15 seconds
+const SWEEP_INTERVAL_MS = 30_000; // 30 seconds
 let sweepRunning = false;
 
 async function runPaymentSweep() {
@@ -154,31 +169,22 @@ async function runPaymentSweep() {
 
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const pendingOrders = await prisma.order.findMany({
-      where: {
-        paymentStatus: 'PENDING',
-        createdAt: { gte: cutoff },
-      },
-      include: {
-        package: { include: { product: true } },
-      },
+      where: { paymentStatus: 'PENDING', createdAt: { gte: cutoff } },
+      include: { package: { include: { product: true } } },
     });
 
-    if (pendingOrders.length === 0) {
-      sweepRunning = false;
-      return;
-    }
-
-    console.log(`[Sweeper] Checking ${pendingOrders.length} pending orders...`);
-
-    for (const order of pendingOrders) {
-      try {
-        const isPaid = await verifyAbaKhqrPayment(order);
-        if (isPaid) {
-          console.log(`[Sweeper] ✅ Payment confirmed for order ${order.paymentTxnId}. Auto-delivering...`);
-          await processVerifiedPayment(order, `SWEEP-${order.paymentMd5 || order.paymentTxnId}`);
+    if (pendingOrders.length > 0) {
+      console.log(`[Sweeper] Checking ${pendingOrders.length} pending orders...`);
+      for (const order of pendingOrders) {
+        try {
+          const isPaid = await verifyAbaKhqrPayment(order);
+          if (isPaid) {
+            console.log(`[Sweeper] ✅ Payment confirmed for ${order.paymentTxnId}`);
+            await processVerifiedPayment(order, `SWEEP-${order.paymentMd5 || order.paymentTxnId}`);
+          }
+        } catch (err) {
+          console.error(`[Sweeper] Error checking order ${order.paymentTxnId}:`, err);
         }
-      } catch (err) {
-        console.error(`[Sweeper] Error checking order ${order.paymentTxnId}:`, err);
       }
     }
   } catch (err) {
@@ -189,14 +195,28 @@ async function runPaymentSweep() {
 }
 
 // ─── Start Server ─────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`===============================================`);
-  console.log(`🚀 DaraTopup Backend running on port ${PORT}`);
+async function startServer() {
+  console.log('===============================================');
+  console.log('🚀 DaraTopup Backend starting...');
   console.log(`🛠️  Mode: ${process.env.SANDBOX_MODE === 'true' ? 'SANDBOX' : 'PRODUCTION'}`);
-  console.log(`🌐 URL: ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`);
-  console.log(`🗄️  DB: ${process.env.DATABASE_URL?.includes('postgresql') ? 'PostgreSQL' : 'SQLite'}`);
-  console.log(`===============================================`);
+  console.log(`🗄️  DB: ${process.env.DATABASE_URL?.includes('postgresql') ? 'PostgreSQL' : 'SQLite (dev.db)'}`);
+  console.log('===============================================');
 
-  setInterval(runPaymentSweep, SWEEP_INTERVAL_MS);
-  console.log(`🔄 Payment sweeper started — checking every ${SWEEP_INTERVAL_MS / 1000}s`);
+  // Run DB migrations and auto-seed before serving traffic
+  await runDatabaseStartup();
+
+  app.listen(PORT, () => {
+    console.log(`\n✅ Server ready on port ${PORT}`);
+    console.log(`🌐 URL: ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`);
+    console.log(`🔗 API: ${process.env.BACKEND_URL || `http://localhost:${PORT}`}/api/products\n`);
+
+    // Start background payment sweeper
+    setInterval(runPaymentSweep, SWEEP_INTERVAL_MS);
+    console.log(`🔄 Payment sweeper started — checking every ${SWEEP_INTERVAL_MS / 1000}s`);
+  });
+}
+
+startServer().catch((err) => {
+  console.error('❌ Fatal startup error:', err);
+  process.exit(1);
 });
