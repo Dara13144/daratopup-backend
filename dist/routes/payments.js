@@ -1,0 +1,384 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const prisma_1 = __importDefault(require("../prisma"));
+const gameProviderMock_1 = require("../utils/gameProviderMock");
+const paymentMock_1 = require("../utils/paymentMock");
+const telegram_1 = require("../utils/telegram");
+const paymentVerification_1 = require("../utils/paymentVerification");
+const router = (0, express_1.Router)();
+// POST /api/payments/create
+router.post('/create', async (req, res) => {
+    try {
+        const { packageId, playerId, playerZoneId, paymentMethod, email } = req.body;
+        if (!packageId || !playerId || !paymentMethod) {
+            return res.status(400).json({ error: 'Required fields missing' });
+        }
+        if (paymentMethod !== 'ABA' && paymentMethod !== 'BAKONG' && paymentMethod !== 'CANADIA') {
+            return res.status(400).json({ error: 'Invalid payment method. Use ABA, BAKONG, or CANADIA' });
+        }
+        // Fetch the package details
+        const pkg = await prisma_1.default.package.findUnique({
+            where: { id: packageId },
+            include: { product: true },
+        });
+        if (!pkg) {
+            return res.status(404).json({ error: 'Package not found' });
+        }
+        // Validate Player ID and retrieve nickname
+        const lookup = await (0, gameProviderMock_1.lookupPlayerNickname)(pkg.product.slug, playerId, playerZoneId);
+        if (!lookup.success) {
+            return res.status(400).json({ error: `Player ID validation failed: ${lookup.error}` });
+        }
+        const nickname = lookup.nickname || 'Unknown Player';
+        // Generate unique payment transaction ID
+        const timeCode = Date.now().toString().slice(-6);
+        const randCode = Math.floor(1000 + Math.random() * 9000);
+        let paymentTxnId = `TOPUP-${timeCode}-${randCode}`;
+        // Map order to logged-in user if available
+        let userId = null;
+        let contactEmail = email || 'guest@topup.com';
+        // Check if auth token header exists
+        if (req.headers.authorization) {
+            const authHeader = req.headers.authorization;
+            const token = authHeader.split(' ')[1];
+            const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-production-12345';
+            try {
+                const decoded = require('jsonwebtoken').verify(token, JWT_SECRET);
+                userId = decoded.id;
+                contactEmail = decoded.email;
+            }
+            catch (err) {
+                // Ignore invalid token and create as guest
+            }
+        }
+        // Generate payment details depending on gateway choice
+        let paymentDetails = {};
+        let paymentQrCode = null;
+        let paymentMd5 = null;
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        if (paymentMethod === 'ABA') {
+            const abaMerchantId = process.env.ABA_PAYWAY_MERCHANT_ID || 'MOCK_MERCHANT';
+            const abaApiKey = process.env.ABA_PAYWAY_API_KEY || 'MOCK_KEY';
+            paymentDetails = (0, paymentMock_1.generateABAMockPayment)(paymentTxnId, pkg.price, `${pkg.product.name} - ${pkg.name}`, abaMerchantId, abaApiKey, baseUrl);
+        }
+        else if (paymentMethod === 'CANADIA') {
+            const qrData = `00020101021230480012canadia_topup0110topup@cnb5204599953038405404${pkg.price.toFixed(2)}5802KH5919CANADIA BANK PLC.6008Phnom Penh62180710${paymentTxnId}6304E5F6`;
+            const md5 = require('crypto').createHash('md5').update(qrData).digest('hex');
+            paymentQrCode = qrData;
+            paymentMd5 = md5;
+            paymentDetails = {
+                qrCode: qrData,
+                md5,
+                txnId: paymentTxnId,
+                bankName: 'Canadia Bank',
+                logo: '/images/payments/canadia.png'
+            };
+        }
+        else {
+            const bakongQr = await (0, paymentMock_1.generateBakongKHQR)(paymentTxnId, pkg.price, `${pkg.product.name} - ${pkg.name}`);
+            paymentQrCode = bakongQr.qrCode;
+            paymentMd5 = bakongQr.md5;
+            if (bakongQr.txnId && bakongQr.txnId !== paymentTxnId) {
+                paymentTxnId = bakongQr.txnId;
+            }
+            paymentDetails = bakongQr;
+        }
+        // Create Order in Database
+        const order = await prisma_1.default.order.create({
+            data: {
+                userId,
+                packageId: pkg.id,
+                playerId,
+                playerZoneId: playerZoneId || null,
+                playerNickname: nickname,
+                price: pkg.price,
+                status: 'PENDING',
+                paymentMethod,
+                paymentStatus: 'PENDING',
+                paymentTxnId,
+                paymentQrCode,
+                paymentMd5,
+                gatewayRef: paymentDetails?.gatewayRef || null,
+                deliveryStatus: 'WAITING',
+            },
+        });
+        // Send Telegram Alert for new order
+        const productSlug = pkg.product.slug || '';
+        const isMLBB = productSlug.includes('mobile-legends');
+        const isFreeFire = productSlug.includes('free-fire');
+        const isValorant = productSlug.includes('valorant');
+        const isBloodStrike = productSlug.includes('blood-strike');
+        const isHoK = productSlug.includes('honor-of-kings');
+        const isFarlight = productSlug.includes('farlight');
+        const isDeltaForce = productSlug.includes('delta-force');
+        let credentialsLabel = `<b>Player ID:</b> <code>${playerId}</code>`;
+        if (isMLBB) {
+            credentialsLabel = `<b>Mobile Legends ID:</b> <code>${playerId}</code>\n<b>Server ID:</b> <code>${playerZoneId || 'N/A'}</code>`;
+        }
+        else if (isFreeFire) {
+            credentialsLabel = `<b>Free Fire ID:</b> <code>${playerId}</code>`;
+        }
+        else if (isValorant) {
+            credentialsLabel = `<b>Valorant ID:</b> <code>${playerId}</code>`;
+        }
+        else if (isBloodStrike) {
+            credentialsLabel = `<b>Blood Strike ID:</b> <code>${playerId}</code>`;
+        }
+        else if (isHoK) {
+            credentialsLabel = `<b>Honor of Kings ID:</b> <code>${playerId}</code>`;
+        }
+        else if (isFarlight) {
+            credentialsLabel = `<b>Farlight 84 ID:</b> <code>${playerId}</code>`;
+        }
+        else if (isDeltaForce) {
+            credentialsLabel = `<b>Delta Force ID:</b> <code>${playerId}</code>`;
+        }
+        else if (playerZoneId) {
+            credentialsLabel = `<b>Player ID:</b> <code>${playerId}</code>\n<b>Server/Zone ID:</b> <code>${playerZoneId}</code>`;
+        }
+        const telegramMessage = `🛒 <b>New Order Placed! (via /payments/create)</b>\n` +
+            `-----------------------------------------\n` +
+            `<b>ID:</b> <code>${order.id}</code>\n` +
+            `<b>Txn ID:</b> <code>${paymentTxnId}</code>\n` +
+            `<b>Game:</b> ${pkg.product.name}\n` +
+            `<b>Package:</b> ${pkg.name}\n` +
+            `${credentialsLabel}\n` +
+            `<b>Nickname:</b> ${nickname}\n` +
+            `<b>Price:</b> $${pkg.price.toFixed(2)}\n` +
+            `<b>Payment:</b> ${paymentMethod}\n` +
+            `<b>Status:</b> PENDING`;
+        await (0, telegram_1.sendTelegramNotification)(telegramMessage);
+        return res.status(201).json({
+            message: 'Order created successfully',
+            order: {
+                id: order.id,
+                paymentTxnId,
+                price: order.price,
+                status: order.status,
+                paymentStatus: order.paymentStatus,
+                playerNickname: nickname,
+            },
+            paymentDetails,
+        });
+    }
+    catch (error) {
+        console.error('Order creation error:', error);
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// GET /api/payments/status/:transactionId
+router.get('/status/:transactionId', async (req, res) => {
+    try {
+        const { transactionId } = req.params;
+        let order = await prisma_1.default.order.findUnique({
+            where: { paymentTxnId: transactionId },
+            include: { package: { include: { product: true } } },
+        });
+        if (!order) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+        // Auto payment checking for pending orders
+        if (order.paymentStatus === 'PENDING' && (order.paymentMethod === 'BAKONG' || order.paymentMethod === 'ABA')) {
+            const isPaid = await (0, paymentVerification_1.verifyAbaKhqrPayment)(order);
+            if (isPaid) {
+                console.log(`[Status Polling] Order ${transactionId} payment confirmed. Processing delivery...`);
+                const result = await (0, paymentVerification_1.processVerifiedPayment)(order, `POLL-AUTO-${order.paymentMd5 || transactionId}`);
+                const updatedOrder = await prisma_1.default.order.findUnique({
+                    where: { paymentTxnId: transactionId },
+                    include: { package: { include: { product: true } } },
+                });
+                if (updatedOrder)
+                    order = updatedOrder;
+            }
+        }
+        return res.status(200).json({
+            id: order.id,
+            transactionId: order.paymentTxnId,
+            gameName: order.package.product.name,
+            gameSlug: order.package.product.slug,
+            packageName: order.package.name,
+            playerId: order.playerId,
+            playerNickname: order.playerNickname,
+            amount: order.price,
+            status: order.status,
+            paymentStatus: order.paymentStatus,
+            paymentMethod: order.paymentMethod,
+            stockDeliveredCode: order.stockDeliveredCode,
+            paymentQrCode: order.paymentQrCode,
+            createdAt: order.createdAt,
+        });
+    }
+    catch (error) {
+        console.error('Fetch order status error:', error);
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/payments/verify
+// SECURE PAYMENT VERIFICATION ENDPOINT
+// 1. Validates txnId & paymentMd5 are present
+// 2. Fetches order from OUR database (amount is always from DB, never trust client)
+// 3. Checks idempotency (already paid)
+// 4. Calls NBC Bakong API directly (server-to-server) using the stored MD5
+// 5. Logs fraud attempts if MD5 doesn't match what's stored
+// 6. Processes delivery atomically and idempotently
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/verify', async (req, res) => {
+    try {
+        const transactionId = req.body.transactionId || req.body.txnId || req.body.paymentTxnId;
+        const clientMd5 = req.body.paymentMd5 || req.body.md5 || null;
+        if (!transactionId) {
+            return res.status(400).json({ verified: false, error: 'transactionId or txnId is required in request body' });
+        }
+        // ── RULE 1: Fetch order from OUR database (single source of truth) ────────
+        const order = await prisma_1.default.order.findUnique({
+            where: { paymentTxnId: transactionId },
+            include: { package: { include: { product: true } } },
+        });
+        if (!order) {
+            return res.status(404).json({ verified: false, error: 'Transaction ID not found in system.' });
+        }
+        // ── RULE 2: Idempotency guard — prevent double processing ─────────────────
+        if (order.paymentStatus === 'PAID' || order.paymentStatus === 'SUCCESS' || order.status === 'PAID' || order.status === 'SUCCESS') {
+            console.log(`[Verify] Order ${transactionId} already processed. Returning cached success.`);
+            return res.status(200).json({
+                verified: true,
+                status: order.status,
+                paymentStatus: order.paymentStatus,
+                message: 'Payment already verified and processed.',
+            });
+        }
+        if (order.paymentStatus === 'EXPIRED' || order.status === 'CANCELLED') {
+            return res.status(410).json({ verified: false, error: 'Order has expired. Please create a new order.' });
+        }
+        // ── RULE 3: Expire orders older than 15 seconds ───────────────────────────
+        const orderAgeMs = Date.now() - new Date(order.createdAt).getTime();
+        if (orderAgeMs > 15 * 1000) {
+            await prisma_1.default.order.update({
+                where: { id: order.id },
+                data: { paymentStatus: 'EXPIRED', status: 'CANCELLED', deliveryStatus: 'FAILED' },
+            });
+            return res.status(410).json({ verified: false, error: 'Order has expired. Please create a new order.' });
+        }
+        // ── RULE 4: MD5 fraud check (if client sends a paymentMd5, verify it matches DB) ─
+        if (clientMd5 && order.paymentMd5) {
+            const storedMd5 = order.paymentMd5.toLowerCase().trim();
+            const incomingMd5 = clientMd5.toLowerCase().trim();
+            if (storedMd5 !== incomingMd5) {
+                console.error(`[SECURITY ALERT] MD5 mismatch on verify! TxnId=${transactionId} stored=${storedMd5} received=${incomingMd5}. Possible fraud.`);
+                await (0, telegram_1.sendTelegramNotification)(`🚨 <b>SECURITY ALERT: MD5 Mismatch!</b>\n` +
+                    `<b>TxnId:</b> <code>${transactionId}</code>\n` +
+                    `<b>Stored MD5:</b> <code>${storedMd5}</code>\n` +
+                    `<b>Received MD5:</b> <code>${incomingMd5}</code>\n` +
+                    `Possible fraud attempt detected.`);
+                return res.status(403).json({ verified: false, error: 'Security signature mismatch. Verification failed.' });
+            }
+        }
+        // ── RULE 5: Server-to-Server NBC Bakong API check (direct, no client trust) ─
+        // Use the MD5 stored in OUR database — never the amount/md5 from the client
+        const md5ToVerify = (order.paymentMd5 || '').toLowerCase().trim();
+        if (!md5ToVerify) {
+            return res.status(400).json({ verified: false, error: 'No payment MD5 stored for this order. Cannot verify.' });
+        }
+        const bakongToken = (process.env.BAKONG_TOKEN || '').replace(/['"]/g, '').trim();
+        const bakongApiUrl = (process.env.BAKONG_API || 'https://api-bakong.nbc.gov.kh').replace(/\/+$/, '');
+        let nbcPaid = false;
+        if (bakongToken) {
+            try {
+                const url = `${bakongApiUrl}/v1/check_transaction_by_md5`;
+                console.log(`[Verify] NBC Bakong server-to-server check: ${url} md5=${md5ToVerify}`);
+                const nbcRes = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${bakongToken}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ md5: md5ToVerify }),
+                    signal: AbortSignal.timeout(8000),
+                });
+                const nbcData = await nbcRes.json();
+                console.log(`[Verify] NBC Response:`, JSON.stringify(nbcData));
+                if (nbcRes.ok && nbcData && (nbcData.responseCode === 0 || nbcData.responseCode === '0') && nbcData.data) {
+                    // Validate amount from gateway matches DB amount (never trust client-sent price)
+                    if (nbcData.data.amount !== undefined) {
+                        const gatewayAmount = parseFloat(nbcData.data.amount);
+                        if (Math.abs(gatewayAmount - order.price) > 0.01) {
+                            console.error(`[SECURITY ALERT] Amount mismatch! TxnId=${transactionId} db=${order.price} gateway=${gatewayAmount}`);
+                            await (0, telegram_1.sendTelegramNotification)(`🚨 <b>AMOUNT MISMATCH on Verify!</b>\n` +
+                                `<b>TxnId:</b> <code>${transactionId}</code>\n` +
+                                `<b>DB Price:</b> $${order.price}\n` +
+                                `<b>Gateway Amount:</b> $${gatewayAmount}`);
+                            return res.status(403).json({ verified: false, error: 'Payment amount mismatch. Verification rejected.' });
+                        }
+                    }
+                    // Validate merchant account
+                    const expectedMerchant = (process.env.BAKONG_ACCOUNT_ID || '').replace(/['"]/g, '').trim().toLowerCase();
+                    const gatewayMerchantRaw = nbcData.data.toAccountId || nbcData.data.receiving_account_id || nbcData.data.receivingAccountId || '';
+                    if (expectedMerchant && gatewayMerchantRaw) {
+                        if (gatewayMerchantRaw.trim().toLowerCase() !== expectedMerchant) {
+                            console.error(`[SECURITY ALERT] Merchant mismatch! Expected=${expectedMerchant} Gateway=${gatewayMerchantRaw}`);
+                            return res.status(403).json({ verified: false, error: 'Merchant account mismatch. Verification rejected.' });
+                        }
+                    }
+                    nbcPaid = true;
+                    console.log(`[Verify] ✅ NBC Bakong confirmed PAID for ${transactionId}`);
+                }
+            }
+            catch (err) {
+                console.error(`[Verify] NBC API call error:`, err.message || err);
+            }
+        }
+        // ── SANDBOX fallback ──────────────────────────────────────────────────────
+        if (!nbcPaid && process.env.SANDBOX_MODE === 'true') {
+            const elapsedMs = orderAgeMs;
+            if (elapsedMs >= 15000) {
+                console.log(`[Verify] [SANDBOX] Auto-approving after ${Math.round(elapsedMs / 1000)}s`);
+                nbcPaid = true;
+            }
+            else {
+                console.log(`[Verify] [SANDBOX] Only ${Math.round(elapsedMs / 1000)}s elapsed — waiting for 15s`);
+            }
+        }
+        // ── RULE 6: Race condition check — re-read DB in case concurrent poll got it first ─
+        if (!nbcPaid) {
+            const freshCheck = await prisma_1.default.order.findUnique({ where: { id: order.id } });
+            if (freshCheck && (freshCheck.paymentStatus === 'SUCCESS' || freshCheck.paymentStatus === 'PAID' || freshCheck.status === 'PAID')) {
+                console.log(`[Verify] Race: already processed by concurrent sweep for ${transactionId}`);
+                return res.status(200).json({
+                    verified: true,
+                    status: freshCheck.status,
+                    paymentStatus: freshCheck.paymentStatus,
+                    message: 'Payment verified and product delivered!',
+                });
+            }
+            return res.status(200).json({
+                verified: false,
+                status: order.status,
+                paymentStatus: order.paymentStatus,
+                message: 'Payment not yet confirmed by Bakong. Please wait and try again.',
+            });
+        }
+        // ── RULE 7: Process delivery atomically ───────────────────────────────────
+        console.log(`[Verify] Payment confirmed for ${transactionId}. Processing delivery...`);
+        const result = await (0, paymentVerification_1.processVerifiedPayment)(order, `VERIFY-NBC-${md5ToVerify}`);
+        return res.status(200).json({
+            verified: true,
+            status: result.currentOrder.status,
+            paymentStatus: result.currentOrder.paymentStatus,
+            deliverySuccess: result.deliverySuccess,
+            deliveredCode: result.deliveredCode,
+            message: result.deliverySuccess
+                ? 'Payment verified and product delivered!'
+                : 'Payment verified but delivery failed. Please contact support.',
+        });
+    }
+    catch (error) {
+        console.error('[Verify] Error:', error);
+        return res.status(500).json({ verified: false, error: 'Internal server error' });
+    }
+});
+exports.default = router;
