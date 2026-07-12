@@ -179,21 +179,34 @@ async function seedDatabase() {
 }
 async function runDatabaseStartup() {
     console.log('[Startup] Initializing database...');
-    // Step 1: Sync Prisma schema to database directly (supports both SQLite and PostgreSQL without dialect migration crashes)
+    // Step 1: Sync database schema (npx prisma migrate deploy in production, npx prisma db push in local dev)
     try {
         const schemaPath = path_1.default.join(__dirname, '..', '..', 'prisma', 'schema.prisma');
-        console.log('[Startup] Running prisma db push...');
-        (0, child_process_1.execSync)(`npx prisma db push --accept-data-loss --schema="${schemaPath}"`, {
-            cwd: path_1.default.join(__dirname, '..', '..'),
-            stdio: 'pipe',
-            env: { ...process.env },
-            timeout: 60_000, // 60s timeout
-        });
-        console.log('[Startup] ✅ Database schema synced successfully.');
+        const isProd = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true';
+        if (isProd) {
+            console.log('[Startup] Running prisma migrate deploy...');
+            (0, child_process_1.execSync)(`npx prisma migrate deploy --schema="${schemaPath}"`, {
+                cwd: path_1.default.join(__dirname, '..', '..'),
+                stdio: 'pipe',
+                env: { ...process.env },
+                timeout: 60_000,
+            });
+            console.log('[Startup] ✅ Database migrations applied successfully.');
+        }
+        else {
+            console.log('[Startup] Running prisma db push...');
+            (0, child_process_1.execSync)(`npx prisma db push --accept-data-loss --schema="${schemaPath}"`, {
+                cwd: path_1.default.join(__dirname, '..', '..'),
+                stdio: 'pipe',
+                env: { ...process.env },
+                timeout: 60_000,
+            });
+            console.log('[Startup] ✅ Local database schema synced successfully.');
+        }
     }
     catch (err) {
         const msg = (err.stderr?.toString() || err.stdout?.toString() || err.message || '').trim();
-        console.warn('[Startup] Database sync warning (non-fatal):', msg.substring(0, 300));
+        console.warn('[Startup] Database init warning (non-fatal):', msg.substring(0, 300));
     }
     // Step 2: Check if products exist — if not, seed
     try {

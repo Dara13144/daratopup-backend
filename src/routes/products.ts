@@ -20,16 +20,10 @@ router.get('/', async (req: Request, res: Response) => {
     });
     return res.status(200).json(products);
   } catch (error: any) {
-    // Log the full error details for diagnosis
-    console.error('[GET /api/products] ERROR:', {
-      name: error?.constructor?.name,
-      message: error?.message,
-      code: error?.code,
-      meta: error?.meta,
-    });
+    console.error("DATABASE ERROR:", error);
     return res.status(500).json({
-      error: 'Internal server error',
-      details: error?.message || String(error),
+      error: "Database error",
+      details: error.message || String(error),
     });
   }
 });
