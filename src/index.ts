@@ -69,7 +69,7 @@ app.get('/', (req, res) => {
     message: 'DaraTopup Backend API Server is running successfully!',
     timestamp: new Date().toISOString(),
     sandbox: process.env.SANDBOX_MODE === 'true',
-    version: '1.0.0',
+    version: '1.0.1',
   });
 });
 
