@@ -57,6 +57,16 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Root route handler to prevent "Cannot GET /"
+app.get('/', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    message: 'DaraTopup Backend API Server is running successfully!',
+    timestamp: new Date().toISOString(),
+    sandbox: process.env.SANDBOX_MODE === 'true',
+  });
+});
+
 // Mounting Sub-Routers
 app.use('/api/auth', authRouter);
 app.use('/api/products', productsRouter);
