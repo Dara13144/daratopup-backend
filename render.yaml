@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: daratopup-backend
+    env: node
+    region: singapore
+    plan: free
+    rootDir: backend
+    buildCommand: npm install && npm run build && npx prisma generate
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: SANDBOX_MODE
+        value: true
+      - key: BACKEND_URL
+        value: https://daratopup-backend-1.onrender.com

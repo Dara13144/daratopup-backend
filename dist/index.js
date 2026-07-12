@@ -11,6 +11,8 @@ const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const path_1 = __importDefault(require("path"));
 const multer_1 = __importDefault(require("multer"));
 const prisma_1 = __importDefault(require("./prisma"));
+// Load environmental variables FIRST before anything else
+dotenv_1.default.config();
 // Route Imports
 const auth_1 = __importDefault(require("./routes/auth"));
 const products_1 = __importDefault(require("./routes/products"));
@@ -19,46 +21,54 @@ const admin_1 = __importDefault(require("./routes/admin"));
 const payments_1 = __importDefault(require("./routes/payments"));
 const webhook_1 = __importDefault(require("./routes/webhook"));
 const paymentVerification_1 = require("./utils/paymentVerification");
-// Load environmental variables
-dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
-// Security Middlewares
+// ─── Security Middleware ───────────────────────────────────────────────────────
 app.use((0, helmet_1.default)({
-    crossOriginResourcePolicy: { policy: "cross-origin" }
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    contentSecurityPolicy: false, // Disable CSP to avoid blocking API responses
 }));
-// Rate limiting configuration
-const limiter = (0, express_rate_limit_1.default)({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 200, // Limit each IP to 200 requests per windowMs
-    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
-    message: { error: 'Too many requests from this IP, please try again after 15 minutes' }
-});
-app.use('/api/', limiter);
-// Middleware configuration
+// ─── CORS ─────────────────────────────────────────────────────────────────────
+// Allow all origins (works for both local dev and production on Render/Vercel)
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {
-        // Dynamically reflect request origin to allow multiple domains (local & production) and support credentials
+        // Allow requests with no origin (mobile apps, curl, Postman) and all browser origins
         callback(null, true);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    exposedHeaders: ['Content-Length', 'X-Request-Id'],
+    optionsSuccessStatus: 200, // Some legacy browsers choke on 204
 }));
-app.use(express_1.default.json());
-// Serve uploaded product images statically
+// Handle OPTIONS preflight requests explicitly for all routes
+app.options('*', (0, cors_1.default)());
+// ─── Body Parsing ─────────────────────────────────────────────────────────────
+app.use(express_1.default.json({ limit: '10mb' }));
+app.use(express_1.default.urlencoded({ extended: true, limit: '10mb' }));
+// ─── Rate Limiting ────────────────────────────────────────────────────────────
+const limiter = (0, express_rate_limit_1.default)({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests from this IP, please try again after 15 minutes' },
+    skip: (req) => req.path === '/api/health' || req.path === '/', // Skip health checks
+});
+app.use('/api/', limiter);
+// ─── Static File Serving ───────────────────────────────────────────────────────
 app.use('/uploads', express_1.default.static(path_1.default.join(__dirname, '..', 'public', 'uploads')));
-// Base health route
-app.get('/api/health', (req, res) => {
+// ─── Health & Root Routes ─────────────────────────────────────────────────────
+app.get('/', (req, res) => {
     res.status(200).json({
         status: 'healthy',
+        message: 'DaraTopup Backend API Server is running successfully!',
         timestamp: new Date().toISOString(),
         sandbox: process.env.SANDBOX_MODE === 'true',
+        version: '1.0.0',
     });
 });
-// Root route handler to prevent "Cannot GET /"
-app.get('/', (req, res) => {
+app.get('/api/health', (req, res) => {
     res.status(200).json({
         status: 'healthy',
         message: 'DaraTopup Backend API Server is running successfully!',
@@ -66,17 +76,17 @@ app.get('/', (req, res) => {
         sandbox: process.env.SANDBOX_MODE === 'true',
     });
 });
-// Mounting Sub-Routers
+// ─── API Routes ────────────────────────────────────────────────────────────────
 app.use('/api/auth', auth_1.default);
 app.use('/api/products', products_1.default);
 app.use('/api/orders', orders_1.default);
 app.use('/api/admin', admin_1.default);
 app.use('/api/payments', payments_1.default);
-app.use('/api/payment', payments_1.default);
+app.use('/api/payment', payments_1.default); // Alias for legacy compatibility
 app.use('/api/webhook', webhook_1.default);
 app.use('/api/payments/webhook', webhook_1.default);
 app.use('/api/payment/webhook', webhook_1.default);
-// ── Product Image Upload Endpoint ────────────────────────────────────────────
+// ─── Product Image Upload Endpoint ────────────────────────────────────────────
 const auth_2 = require("./middleware/auth");
 const storage = multer_1.default.diskStorage({
     destination: path_1.default.join(__dirname, '..', 'public', 'uploads', 'products'),
@@ -93,24 +103,35 @@ app.post('/api/admin/upload-image', auth_2.authenticateJWT, auth_2.requireAdmin,
     const imageUrl = `/uploads/products/${req.file.filename}`;
     return res.status(200).json({ imageUrl });
 });
-// Express Error Handling Middleware fallback
+// ─── 404 Catch-all ────────────────────────────────────────────────────────────
+app.use((req, res) => {
+    res.status(404).json({
+        error: `Route not found: ${req.method} ${req.path}`,
+        availableRoutes: [
+            'GET /',
+            'GET /api/health',
+            'POST /api/auth/login',
+            'POST /api/auth/register',
+            'GET /api/products',
+            'GET /api/products/:slug',
+            'POST /api/orders',
+            'GET /api/orders/status/:txnId',
+        ],
+    });
+});
+// ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
     console.error('Unhandled Server Error:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
+    res.status(500).json({ error: 'Internal Server Error', details: process.env.NODE_ENV === 'development' ? err.message : undefined });
 });
-// ─────────────────────────────────────────────────────────────────────────────
-// BACKGROUND PAYMENT SWEEPER (Real-Time Safety Sweeper)
-// Runs every 3 minutes. Sweeps PENDING orders, checks status against gateways,
-// processes delivery for paid orders, and automatically expires old ones.
-// ─────────────────────────────────────────────────────────────────────────────
-const SWEEP_INTERVAL_MS = 15_000; // 15 seconds — real-time payment sweeper
+// ─── BACKGROUND PAYMENT SWEEPER ───────────────────────────────────────────────
+const SWEEP_INTERVAL_MS = 15_000; // 15 seconds
 let sweepRunning = false;
 async function runPaymentSweep() {
     if (sweepRunning)
         return;
     sweepRunning = true;
     try {
-        // Run stale orders sweep first to clean up expired invoices
         await (0, paymentVerification_1.expireOldOrders)();
         const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
         const pendingOrders = await prisma_1.default.order.findMany({
@@ -147,14 +168,14 @@ async function runPaymentSweep() {
         sweepRunning = false;
     }
 }
-// Start Express Server (Trigger nodemon restart)
+// ─── Start Server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
     console.log(`===============================================`);
-    console.log(`🚀 Top-Up Server is running on port ${PORT}`);
-    console.log(`🛠️ Mode: ${process.env.SANDBOX_MODE === 'true' ? 'SANDBOX / SIMULATOR' : 'PRODUCTION'}`);
-    console.log(`🌐 API Endpoint: http://localhost:${PORT}`);
+    console.log(`🚀 DaraTopup Backend running on port ${PORT}`);
+    console.log(`🛠️  Mode: ${process.env.SANDBOX_MODE === 'true' ? 'SANDBOX' : 'PRODUCTION'}`);
+    console.log(`🌐 URL: ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`);
+    console.log(`🗄️  DB: ${process.env.DATABASE_URL?.includes('postgresql') ? 'PostgreSQL' : 'SQLite'}`);
     console.log(`===============================================`);
-    // Start background payment sweeper
     setInterval(runPaymentSweep, SWEEP_INTERVAL_MS);
     console.log(`🔄 Payment sweeper started — checking every ${SWEEP_INTERVAL_MS / 1000}s`);
 });

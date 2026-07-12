@@ -198,6 +198,8 @@ async function generateBakongKHQR(tranId, amount, itemName) {
                 const isKhrAccount = accountId.toLowerCase().endsWith('@bkrt');
                 const currency = isKhrAccount ? 'KHR' : 'USD';
                 const finalAmount = isKhrAccount ? Math.round(amount * 4100) : parseFloat(amountStr);
+                const frontendUrl = (process.env.FRONTEND_URL || 'https://daratopup.com').trim().replace(/\/$/, '');
+                const backendUrl = (process.env.BACKEND_URL || 'https://daratopup-backend-1.onrender.com').trim().replace(/\/$/, '');
                 const payload = {
                     trans_id: tranId,
                     req_custom: { lang: "km", ttl: 5 },
@@ -209,8 +211,8 @@ async function generateBakongKHQR(tranId, amount, itemName) {
                         currency: currency
                     },
                     req_url: {
-                        return_url: `https://daratopup.com/orders/${tranId}`,
-                        webhook_url: `https://daratopup.com/api/webhooks`
+                        return_url: `${frontendUrl}/orders/${tranId}`,
+                        webhook_url: `${backendUrl}/api/webhook`
                     }
                 };
                 const apiRes = await fetch(checkoutUrl, {
