@@ -1,15 +1,11 @@
-// Prisma schema — supports both SQLite (local dev) and PostgreSQL (production on Render)
-// Set DATABASE_URL in .env:
-//   Local:      DATABASE_URL="file:./dev.db"
-//   Production: DATABASE_URL="postgresql://user:pass@host/db?pgbouncer=true"
-
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x", "rhel-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
 }
 
 model User {
