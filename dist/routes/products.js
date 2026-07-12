@@ -33,7 +33,7 @@ router.get('/', async (req, res) => {
         });
         return res.status(500).json({
             error: 'Internal server error',
-            details: process.env.NODE_ENV !== 'production' ? error?.message : 'Check server logs',
+            details: error?.message || String(error),
         });
     }
 });
