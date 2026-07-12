@@ -4,7 +4,7 @@
 //   Production: DATABASE_URL="postgresql://user:pass@host/db?pgbouncer=true"
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
