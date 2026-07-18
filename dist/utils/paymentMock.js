@@ -109,9 +109,10 @@ async function generateBakongKHQR(tranId, amount, itemName) {
     const meatikaApiKey = process.env.MEATIKA_API_KEY ||
         (process.env.BAKONG_TOKEN?.startsWith('sk_') ? process.env.BAKONG_TOKEN : '') ||
         '';
-    const meatikaApiUrl = process.env.MEATIKA_API_URL ||
+    const rawMeatikaUrl = process.env.MEATIKA_API_URL ||
         (process.env.BAKONG_API?.includes('meatika') ? process.env.BAKONG_API : '') ||
-        'https://khqr-api.meatika.dev/api';
+        'https://khqr-api.meatika.dev';
+    const meatikaApiUrl = rawMeatikaUrl.replace(/\/$/, '').replace(/\/api$/, '') + '/api';
     if (meatikaApiKey) {
         try {
             const generateUrl = `${meatikaApiUrl}/generate-khqr?amount=${parseFloat(amountStr)}&api_key=${meatikaApiKey}`;
@@ -340,9 +341,10 @@ async function checkBakongPaymentStatus(md5, khpayTxnId, ctx) {
     const meatikaApiKey = process.env.MEATIKA_API_KEY ||
         (process.env.BAKONG_TOKEN?.startsWith('sk_') ? process.env.BAKONG_TOKEN : '') ||
         '';
-    const meatikaApiUrl = process.env.MEATIKA_API_URL ||
+    const rawMeatikaCheckUrl = process.env.MEATIKA_API_URL ||
         (process.env.BAKONG_API?.includes('meatika') ? process.env.BAKONG_API : '') ||
-        'https://khqr-api.meatika.dev/api';
+        'https://khqr-api.meatika.dev';
+    const meatikaApiUrl = rawMeatikaCheckUrl.replace(/\/$/, '').replace(/\/api$/, '') + '/api';
     if (meatikaApiKey) {
         try {
             const checkUrl = `${meatikaApiUrl}/check-payment-status?md5=${sanitizedMd5}&api_key=${meatikaApiKey}`;
